@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>텀투스 프로야구 2026 - 리얼 AI 컴프야</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Arial', sans-serif; background-color: #02070d; user-select: none; }
+        #game-hud { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
+        /* 상단 전광판 스코어보드 */
+        .scoreboard {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            background: linear-gradient(180deg, #111e2e 0%, #070d14 100%);
+            border: 2px solid #1a3c63; border-radius: 6px; padding: 10px 25px;
+            color: white; display: flex; align-items: center; gap: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); pointer-events: auto;
+        }
+        .team-badge { font-weight: 900; font-size: 18px; color: #00ffcc; }
+        .score-num { font-size: 26px; font-weight: bold; min-width: 40px; text-align: center; }
+        .inning { background: #ff3366; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+
+        /* 좌하단 설정창 */
+        .config-box {
+            position: absolute; bottom: 20px; left: 20px; background: rgba(7, 13, 20, 0.9); border: 1px solid #1a3c63;
+            padding: 15px; border-radius: 8px; color: white; pointer-events: auto; width: 220px;
+        }
+        .config-box label { display: block; font-size: 11px; color: #8899aa; margin-bottom: 5px; }
+        .config-box input { width: 100%; padding: 6px; background: #121b26; border: 1px solid #253b54; color: white; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; }
+        
+        /* 컴프야 핵심: 스트라이크 존 조준선 */
+        .strike-zone-container {
+            position: absolute; top: 58%; left: 50%; transform: translate(-50%, -50%);
+            width: 140px; height: 180px; border: 3px dashed rgba(255, 255, 255, 0.4);
+            display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr);
+        }
+        .strike-zone-container div { border: 1px solid rgba(255,255,255,0.15); }
+        .strike-zone-container .hot-zone { background: rgba(255, 51, 102, 0.25); border: 2px solid rgba(255, 51, 102, 0.6); }
+
+        /* 우하단 조작 버튼 부 */
+        .action-layout { position: absolute; bottom: 30px; right: 30px; pointer-events: auto; display: flex; flex-direction: column; gap: 12px; }
+        .com2us-btn { width: 140px; height: 60px; border-radius: 30px; border: none; font-size: 18px; font-weight: bold; cursor: pointer; box-shadow: 0 6px 15px rgba(0,0,0,0.4); transition: transform 0.1s; }
+        #startBtn { background: linear-gradient(135deg, #00ffcc 0%, #0099ff 100%); color: #050e14; }
+        #swingBtn { background: linear-gradient(135deg, #ff3366 0%, #ff5e3a 100%); color: white; font-size: 20px; }
+        .com2us-btn:active { transform: scale(0.95); }
+
+        /* 중앙 알림 연출 텍스트 */
+        #fx-overlay { position: absolute; top: 32%; left: 50%; transform: translate(-50%, -50%); font-size: 50px; font-weight: 900; color: #ffff00; font-style: italic; text-shadow: 3px 3px 0px #000; pointer-events: none; text-align: center; width: 100%; }
+    </style>
+    
+    <!-- 🌐 글로벌 초고속 원본 3D 라이브러리 탑재 -->
+    <script src="https://unpkg.com"></script>
+</head>
+<body>
+
+    <div id="game-hud">
+        <!-- 스코어 셋팅 -->
+        <div class="scoreboard">
+            <span class="team-badge" id="hudTeamName">DEAGU LIONS</span>
+            <div class="score-num" id="hudScore">0</div>
+            <span class="inning">1회말</span>
+        </div>
+
+        <!-- 타격 격자 가이드 -->
+        <div class="strike-zone-container">
+            <div></div><div></div><div></div>
+            <div></div><div class="hot-zone"></div><div></div>
+            <div></div><div></div><div></div>
+        </div>
+
+        <!-- 스킨 업로더 인터페이스 -->
+        <div class="config-box">
+            <label>나의 커스텀 팀 이름</label>
+            <input type="text" id="teamInput" value="대구 라이온즈">
+            <label>유니폼 이미지 파일 (.png/.jpg)</label>
+            <input type="file" id="skinFile" accept="image/*">
+        </div>
+
+        <!-- 액션 패드 -->
+        <div class="action-layout">
+            <button class="com2us-btn" id="startBtn">경기 시작</button>
+            <button class="com2us-btn" id="swingBtn">SWING</button>
+        </div>
+    </div>
+
+    <div id="fx-overlay">경기 시작을 누르세요</div>
+
+    <script>
+        try {
+            // 1. 3D 공간 및 카메라 포지셔닝 설정 (컴프야 앵글 최적화)
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x06111c);
+
+            const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 3.5, 4.5); 
+            camera.lookAt(0, 1.0, -10);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 전체 조명 세기 업그레이드
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 15, 5);
+            scene.add(dirLight);
+
+            // 2. 야구장 월드 생성
+            const groundGeo = new THREE.PlaneGeometry(100, 100);
+            const groundMat = new THREE.MeshStandardMaterial({ color: 0x226430, roughness: 0.8 });
+            const ground = new THREE.Mesh(groundGeo, groundMat);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = -0.05;
+            scene.add(ground);
+
+            const dirtGeo = new THREE.CylinderGeometry(4, 4, 0.02, 32);
+            const dirtMat = new THREE.MeshStandardMaterial({ color: 0x916543, roughness: 0.9 });
+            const dirt = new THREE.Mesh(dirtGeo, dirtMat);
+            dirt.position.set(0, 0, -2);
+            scene.add(dirt);
+
+            // 3. 3D 캐릭터 빌더 엔진 (투수 & 타자 생성)
+            const sharedMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 0.5 });
+
+            function createCharacter(x, z, color) {
+                const group = new THREE.Group();
+                const mat = sharedMat.clone();
+                if(color) mat.color.setHex(color);
+
+                const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.18, 1.2, 16), mat);
+                torso.position.y = 0.6;
+                group.add(torso);
+
+                const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16, 16), mat);
+                head.position.y = 1.35;
+                group.add(head);
+
+                group.position.set(x, 0, z);
+                scene.add(group);
+                return { group, torso, head, mat };
+            }
+
+            // 투수마운드 및 타석 고정 배치
+            const pitcher = createCharacter(0, -16, 0x1c3c63); 
+            const batter = createCharacter(-0.7, -2, 0xffffff);
+            batter.group.rotation.y = Math.PI / 2;
+
+            // 타자 알루미늄 배트 결합
+            const batGeo = new THREE.CylinderGeometry(0.025, 0.013, 0.9, 16);
+            const batMat = new THREE.MeshStandardMaterial({ color: 0xcc9966, metalness: 0.2 });
+            const bat = new THREE.Mesh(batGeo, batMat);
+            bat.position.set(0.2, 0.9, 0.1);
+            bat.rotation.set(Math.PI/3, 0, -Math.PI/4);
+            batter.group.add(bat);
+
+            // 야구공
+            const baseball = new THREE.Mesh(new THREE.SphereGeometry(0.08, 16, 16), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            baseball.position.set(0, 1.35, -16);
+            scene.add(baseball);
+
+            // 4. 인게임 코어 데이터 엔진 & AI 자동 투구 시스템
+            let score = 0;
+            let isPitching = false;
+            let aiPitchTimer = null;
+            let currentBallSpeed = 0.35;
+            let isActiveSwing = false;
+            let swingTime = 0;
+            let gameStarted = false;
+
+            // 사운드 합성기 모듈
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            function playSound(freq, duration) {
+                try {
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.connect(gain); gain.connect(audioCtx.destination);
+                    osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                    osc.start(); osc.stop(audioCtx.currentTime + duration);
+                } catch(e) {}
+            }
+
+            // 유니폼 실시간 커스텀 텍스처 삽입 이벤트
+            document.getElementById('skinFile').addEventListener('change', function(e) {
+                if(e.target.files && e.target.files[0]) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        new THREE.TextureLoader().load(evt.target.result, function(tex) {
+                            batter.mat.map = tex; batter.mat.needsUpdate = true;
+                            pitcher.mat.map = tex; pitcher.mat.needsUpdate = true;
+                            document.getElementById('fx-overlay').innerText = "CUSTOM SKIN APPLIED";
+                        });
+                    };
+                    reader.readAsDataURL(e.target.files[0]);
+                }
+            });
+
+            document.getElementById('teamInput').addEventListener('input', (e) => {
+                document.getElementById('hudTeamName').innerText = e.target.value.toUpperCase();
+            });
+
+            // 플레이어 작동 루프 가동
+            document.getElementById('startBtn').addEventListener('click', () => {
+                if (gameStarted) return;
+                gameStarted = true;
+document.getElementById('startBtn').style.display = 'none';
+document.getElementById('fx-overlay').innerText = "PLAY BALL!";
+startAiPitchRoutine();
+});
+function startAiPitchRoutine() {
+if (!gameStarted) return;
+aiPitchTimer = setInterval(() => {
+if (!isPitching) {
+currentBallSpeed = 0.28 + Math.random() * 0.15;
+baseball.position.set((Math.random() - 0.5) * 0.2, 1.35, -16);
+baseball.userData = { isHit: false, curveX: (Math.random() - 0.5) * 0.006 };
+isPitching = true;
+document.getElementById('fx-overlay').innerText = "투수 와인드업!";
+}
+}, 3000);
+}
+// 타격 스윙 액션 핸들러
+document.getElementById('swingBtn').addEventListener('click', () => {
+if (!isPitching || isActiveSwing) return;
+isActiveSwing = true;
+swingTime = 0;
+const ballZ = baseball.position.z;
+if (ballZ >= -3.5 && ballZ <= -0.5) {
+playSound(650, 0.12);
+if (ballZ >= -2.4 && ballZ <= -1.4) { // 핫존 조준 적중
+score += 100;
+document.getElementById('hudScore').innerText = score;
+document.getElementById('fx-overlay').innerText = "🔥 HOME RUN!! 🔥";
+playSound(350, 0.8);
+triggerHit(true);
+} else {
+score += 30;
+document.getElementById('hudScore').innerText = score;
+document.getElementById('fx-overlay').innerText = "HIT!";
+triggerHit(false);
+}
+} else {
+document.getElementById('fx-overlay').innerText = "STRIKE!";
+setTimeout(resetBall, 900);
+}
+});
+function triggerHit(isHomerun) {
+isPitching = false;
+baseball.userData = {
+vx: (Math.random() - 0.5) * 0.35,
+vy: isHomerun ? 0.42 : 0.15,
+vz: isHomerun ? -0.9 : -0.4,
+isHit: true
+};
+}
+function resetBall() {
+baseball.position.set(0, 1.35, -16);
+baseball.userData = { isHit: false };
+isPitching = false;
+isActiveSwing = false;
+bat.rotation.set(Math.PI/4, 0, -Math.PI/4);
+}
+// 5. 프레임 렌더링 루프
+function animate() {
+requestAnimationFrame(animate);
+if (isPitching && !baseball.userData.isHit) {
+baseball.position.z += currentBallSpeed;
+baseball.position.x += baseball.userData.curveX;
+if (baseball.position.z > 1.0) {
+document.getElementById('fx-overlay').innerText = "STRIKE!";
+resetBall();
+}
+}
+if (baseball.userData && baseball.userData.isHit) {
+baseball.position.x += baseball.userData.vx;
+baseball.position.y += baseball.userData.vy;
+baseball.position.z += baseball.userData.vz;
+baseball.userData.vy -= 0.0055;
+if (baseball.position.y < 0 || baseball.position.z < -60) {
+resetBall();
+}
+}
+if (isActiveSwing) {
+swingTime += 0.22;
+bat.rotation.z += 0.5;
+if (swingTime > Math.PI) {
+isActiveSwing = false;
+}
+}
+renderer.render(scene, camera);
+}
+window.addEventListener('resize', () => {
+camera.aspect = window.innerWidth / window.innerHeight;
+camera.updateProjectionMatrix();
+renderer.setSize(window.innerWidth, window.innerHeight);
+});
+animate();
+} catch (error)
